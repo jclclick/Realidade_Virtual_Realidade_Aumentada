@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Lua em Realidade Aumentada</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: Arial, sans-serif; }
+
+    /* ---------- elementos da tela de AR ---------- */
+    #status {
+      position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+      z-index: 10; padding: 10px 18px; border-radius: 8px; color: #fff;
+      background: rgba(0,0,0,.75); font-size: 16px; white-space: nowrap;
+      transition: background .3s;
+    }
+    #veja-mais {
+      position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%);
+      z-index: 10; padding: 16px 34px; border-radius: 40px;
+      background: #fff; color: #111; font-size: 18px; font-weight: bold;
+      text-decoration: none; box-shadow: 0 6px 24px rgba(0,0,0,.5);
+      display: none; animation: surgir .5s ease;
+    }
+    #veja-mais.visivel { display: block; }
+    @keyframes surgir { from { opacity: 0; transform: translate(-50%, 20px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+    /* ---------- elementos da sala 3D ---------- */
+    #carregando {
+      position: fixed; inset: 0; z-index: 30; background: #0b0b12; color: #fff;
+      display: flex; align-items: center; justify-content: center; font-size: 18px;
+      transition: opacity .6s;
+    }
+    #dica {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+      z-index: 10; padding: 10px 18px; border-radius: 8px; color: #fff; text-align: center;
+      background: rgba(0,0,0,.6); font-size: 14px; max-width: 80vw;
+      transition: opacity 1s; pointer-events: none;
+    }
+    #parede-atual {
+      position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+      z-index: 10; padding: 8px 16px; border-radius: 8px; color: #fff;
+      background: rgba(0,0,0,.6); font-size: 15px; pointer-events: none;
+    }
+    canvas.a-canvas { touch-action: none; }
+  </style>
+</head>
+<body>
+<script>
+/* =====================================================================
+   UM ÚNICO ARQUIVO, DOIS MODOS:
+   - index.html            -> Realidade Aumentada (câmera + marcador da Lua)
+   - index.html?sala=1     -> Sala virtual 3D (museu com 4 paredes)
+   ===================================================================== */
+
+const MODO_SALA = new URLSearchParams(location.search).has("sala");
+
+/* Fotos das paredes (arquivos na mesma pasta do index.html) */
+const PAREDES = [
+  { arquivo: "lua_por_inteiro_parede1.webp",                titulo: "A Lua por inteiro" },
+  { arquivo: "fotodalua_da_terra_parede2.webp",             titulo: "A Lua vista da Terra" },
+  { arquivo: "representacao-das-fases-da-lua_parede3.webp", titulo: "As fases da Lua" },
+  { arquivo: "homem_na_lua_parede4.webp",                   titulo: "O homem na Lua" }
+];
+
+function carregarScript(src) {
+  return new Promise((ok, erro) => {
+    const s = document.createElement("script");
+    s.src = src; s.onload = ok; s.onerror = () => erro(new Error("Falha ao carregar " + src));
+    document.head.appendChild(s);
+  });
+}
+
+/* ============================ MODO AR ============================ */
+async function iniciarAR() {
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="status">Carregando realidade aumentada...</div>
+    <a id="veja-mais" href="?sala=1" target="_blank" rel="noopener">Veja mais &rarr;</a>
+  `);
+
+  await carregarScript("https://aframe.io/releases/1.6.0/aframe.min.js");
+  await carregarScript("https://raw.githack.com/AR-js-org/AR.js/3.4.8/aframe/build/aframe-ar.js");
+
+  document.body.insertAdjacentHTML("beforeend", `
+    <a-scene
+      embedded
+      vr-mode-ui="enabled: false"
+      renderer="antialias: true; colorManagement: true"
+      arjs="sourceType: webcam;
+            sourceWidth: 1280; sourceHeight: 960;
+            displayWidth: 1280; displayHeight: 960;
+            canvasWidth: 960; canvasHeight: 720;
+            maxDetectionRate: 30;
+            trackingMethod: best; detectionMode: mono;
+            debugUIEnabled: false;"
+    >
+      <a-light type="ambient" intensity="0.9"></a-light>
+      <a-light type="directional" position="2 4 3" intensity="1.2"></a-light>
+
+      <a-marker
+        id="marcador-lua"
+        type="pattern"
+        url="https://jclclick.github.io/RealidadeVirtual/pattern-lua.patt"
+        emitevents="true"
+        smooth="true" smoothCount="10" smoothTolerance="0.01" smoothThreshold="5"
+      >
+        <a-sphere
+          position="0 0.45 0" radius="0.45"
+          segments-width="64" segments-height="64"
+          material="src: textura-lua.jpg; roughness: 0.9; metalness: 0.05"
+          animation="property: rotation; to: 0 360 0; loop: true; dur: 18000; easing: linear"
+        ></a-sphere>
+      </a-marker>
+
+      <a-entity camera></a-entity>
+    </a-scene>
+  `);
+
+  const marcador = document.getElementById("marcador-lua");
+  const status = document.getElementById("status");
+  const botao = document.getElementById("veja-mais");
+  let timerPerdido = null;
+
+  marcador.addEventListener("markerFound", () => {
+    clearTimeout(timerPerdido);
+    status.textContent = "Marcador da Lua reconhecido!";
+    status.style.background = "rgba(0,120,40,.85)";
+    botao.classList.add("visivel");           // a AR funcionou -> libera o botão
+  });
+
+  marcador.addEventListener("markerLost", () => {
+    timerPerdido = setTimeout(() => {
+      status.textContent = "Procurando marcador da Lua...";
+      status.style.background = "rgba(0,0,0,.75)";
+    }, 800);                                    // o botão continua na tela
+  });
+
+  status.textContent = "Procurando marcador da Lua...";
+}
+
+/* ========================== MODO SALA 3D ========================== */
+async function iniciarSala() {
+  document.title = "Museu da Lua";
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="carregando">Entrando no museu...</div>
+    <div id="parede-atual">Parede 1 de 4</div>
+    <div id="dica">Arraste para olhar ao redor<br>Pinça com dois dedos para chegar mais perto</div>
+  `);
+
+  await carregarScript("https://aframe.io/releases/1.6.0/aframe.min.js");
+
+  const T = 8;            // lado da sala (metros)
+  const H = 4;            // altura
+  const M = T / 2;        // metade
+  const LIMITE = M - 0.9; // até onde dá para andar (não atravessa a parede)
+
+  /* Descobre as proporções das fotos para não distorcer */
+  const medidas = await Promise.all(PAREDES.map(p => new Promise(res => {
+    const img = new Image();
+    img.onload = () => res({ w: img.naturalWidth, h: img.naturalHeight });
+    img.onerror = () => res({ w: 4, h: 3 });
+    img.src = p.arquivo;
+  })));
+
+  /* Cada parede: posição e rotação para ficar de frente para o centro */
+  const posicoes = [
+    { pos: `0 0 ${-M}`, rotY: 0   },   // parede 1: à frente
+    { pos: `${M} 0 0`,  rotY: -90 },   // parede 2: direita
+    { pos: `0 0 ${M}`,  rotY: 180 },   // parede 3: atrás
+    { pos: `${-M} 0 0`, rotY: 90  }    // parede 4: esquerda
+  ];
+
+  let obras = "";
+  PAREDES.forEach((p, i) => {
+    const { w, h } = medidas[i];
+    const maxLado = 3.4, maxAlt = 2.4;
+    let largura = maxLado, altura = maxLado * h / w;
+    if (altura > maxAlt) { altura = maxAlt; largura = maxAlt * w / h; }
+    const y = 1.85;
+    const { pos, rotY } = posicoes[i];
+
+    obras += `
+      <a-entity position="${pos}" rotation="0 ${rotY} 0">
+        <a-plane width="${T}" height="${H}" position="0 ${H/2} 0"
+                 material="color: #d9d4c7; roughness: 1"></a-plane>
+        <a-box width="${largura + 0.22}" height="${altura + 0.22}" depth="0.06"
+               position="0 ${y} 0.03" material="color: #1a1410; roughness: .6"></a-box>
+        <a-plane width="${largura}" height="${altura}" position="0 ${y} 0.07"
+                 material="src: ${p.arquivo}; shader: flat"></a-plane>
+        <a-text value="${p.titulo}" align="center" color="#333" width="3.2"
+                position="0 ${y - altura/2 - 0.3} 0.02"></a-text>
+        <a-light type="point" intensity="0.55" distance="7" color="#fff3df"
+                 position="0 3.4 1.6"></a-light>
+      </a-entity>`;
+  });
+
+  document.body.insertAdjacentHTML("beforeend", `
+    <a-scene id="museu" vr-mode-ui="enabled: false" renderer="antialias: true; colorManagement: true"
+             background="color: #0b0b12" loading-screen="enabled: false">
+      <a-light type="ambient" intensity="0.55"></a-light>
+
+      <a-plane rotation="-90 0 0" width="${T}" height="${T}" position="0 0 0"
+               material="color: #4a3a2c; roughness: .8"></a-plane>
+      <a-plane rotation="90 0 0" width="${T}" height="${T}" position="0 ${H} 0"
+               material="color: #f1efe9; roughness: 1"></a-plane>
+
+      ${obras}
+
+      <a-entity id="rig" position="0 0 0">
+        <a-entity id="cam" camera="fov: 70; near: 0.05" position="0 1.6 0"></a-entity>
+      </a-entity>
+    </a-scene>
+  `);
+
+  const cena = document.getElementById("museu");
+  const rig = document.getElementById("rig");
+  const cam = document.getElementById("cam");
+  const rotulo = document.getElementById("parede-atual");
+  const dica = document.getElementById("dica");
+
+  cena.addEventListener("loaded", () => {
+    const o3d = cam.object3D;
+    o3d.rotation.order = "YXZ";
+
+    let yaw = 0, pitch = 0;                 // yaw 0 = olhando para a parede 1
+    const toques = new Map();               // dedos na tela
+    let distAnterior = null;
+
+    function atualizarRotulo() {
+      const graus = (((yaw * 180 / Math.PI) % 360) + 360) % 360;
+      const ordem = [1, 4, 3, 2];           // 0°, 90°, 180°, 270° (anti-horário)
+      rotulo.textContent = "Parede " + ordem[Math.round(graus / 90) % 4] + " de 4";
+    }
+
+    const aplicar = () => { o3d.rotation.set(pitch, yaw, 0); atualizarRotulo(); };
+
+    function andar(d) {                     // d > 0 = para frente
+      const p = rig.object3D.position;
+      p.x += -Math.sin(yaw) * d;
+      p.z += -Math.cos(yaw) * d;
+      p.x = Math.max(-LIMITE, Math.min(LIMITE, p.x));
+      p.z = Math.max(-LIMITE, Math.min(LIMITE, p.z));
+    }
+
+    const esconderDica = () => { dica.style.opacity = 0; };
+    const alvo = cena.canvas || document.querySelector("canvas.a-canvas") || document.body;
+
+    alvo.addEventListener("pointerdown", e => {
+      if (alvo.setPointerCapture) alvo.setPointerCapture(e.pointerId);
+      toques.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      distAnterior = null;
+      esconderDica();
+    });
+
+    alvo.addEventListener("pointermove", e => {
+      const t = toques.get(e.pointerId);
+      if (!t) return;
+      const dx = e.clientX - t.x, dy = e.clientY - t.y;
+
+      if (toques.size === 1) {              // um dedo: olhar ao redor
+        yaw   += dx * 0.005;
+        pitch += dy * 0.005;
+        pitch = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, pitch));
+        aplicar();
+        t.x = e.clientX; t.y = e.clientY;
+      } else if (toques.size === 2) {       // pinça: anda para frente / trás
+        t.x = e.clientX; t.y = e.clientY;
+        const [a, b] = [...toques.values()];
+        const dist = Math.hypot(a.x - b.x, a.y - b.y);
+        if (distAnterior !== null) andar((dist - distAnterior) * 0.012);
+        distAnterior = dist;
+      }
+    });
+
+    const soltar = e => { toques.delete(e.pointerId); distAnterior = null; };
+    alvo.addEventListener("pointerup", soltar);
+    alvo.addEventListener("pointercancel", soltar);
+
+    // computador: roda do mouse anda para frente / para trás
+    alvo.addEventListener("wheel", e => {
+      e.preventDefault(); andar(-e.deltaY * 0.004); esconderDica();
+    }, { passive: false });
+
+    // impede o zoom da página no iPhone
+    ["gesturestart", "gesturechange"].forEach(ev =>
+      document.addEventListener(ev, e => e.preventDefault()));
+
+    aplicar();
+
+    const c = document.getElementById("carregando");
+    setTimeout(() => { c.style.opacity = 0; setTimeout(() => c.remove(), 700); }, 600);
+    setTimeout(esconderDica, 7000);
+  });
+}
+
+(MODO_SALA ? iniciarSala() : iniciarAR()).catch(err => {
+  document.body.insertAdjacentHTML("beforeend",
+    '<div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;padding:24px;text-align:center">Erro ao carregar: ' + err.message + '</div>');
+});
+</script>
+</body>
+</html>
